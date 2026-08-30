@@ -1,0 +1,27 @@
+# Same base as the API image (shares the requirements.txt, so
+# dependency versions can never drift between the two services) but a
+# different CMD -- the worker is a long-running consumer process, not
+# an HTTP server, and has no exposed port or healthcheck endpoint of
+# its own to hit (its "health" is really "is it still connected to
+# RabbitMQ", which container orchestration typically checks via
+# process liveness rather than an HTTP probe).
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+COPY requirements.txt .
+RUN pip install --no-cache-dir --user -r requirements.txt
+
+FROM python:3.12-slim
+
+RUN useradd --create-home --shell /bin/bash appuser
+WORKDIR /app
+
+COPY --from=builder /root/.local /home/appuser/.local
+COPY . .
+RUN chown -R appuser:appuser /app
+
+USER appuser
+ENV PATH="/home/appuser/.local/bin:${PATH}"
+ENV PYTHONUNBUFFERED=1
+
+CMD ["python3", "-m", "app.workers.worker"]

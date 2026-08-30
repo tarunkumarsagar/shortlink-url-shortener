@@ -1,0 +1,100 @@
+name: CI
+
+# Runs on the standard GitHub-hosted runners, free for public
+# repositories -- no paid runners, no self-hosted infrastructure.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    # Real service containers, not mocks -- the same philosophy as
+    # this project's test suite throughout: integration tests run
+    # against genuine Postgres/Redis/RabbitMQ instances.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: devpassword
+          POSTGRES_DB: shortlink
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+      rabbitmq:
+        image: rabbitmq:3-management-alpine
+        ports: ["5672:5672"]
+        options: >-
+          --health-cmd "rabbitmq-diagnostics ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        working-directory: backend
+        run: pip install -r requirements.txt --break-system-packages
+
+      - name: Lint (ruff)
+        working-directory: backend
+        run: |
+          pip install ruff --break-system-packages
+          ruff check app/ --output-format=github || true
+          # `|| true`: linting issues are surfaced but non-blocking for
+          # now (this is a learning project, not a team codebase with
+          # an enforced style guide yet) -- flip this to a hard failure
+          # once the codebase is deliberately brought to a clean
+          # baseline. Documented as a known, temporary relaxation.
+
+      - name: Run database migrations
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:devpassword@localhost:5432/shortlink
+        run: python3 -m app.core.migrate
+
+      - name: Run tests
+        working-directory: backend
+        env:
+          DATABASE_URL: postgresql://postgres:devpassword@localhost:5432/shortlink
+          REDIS_URL: redis://localhost:6379/0
+          RABBITMQ_URL: amqp://guest:guest@localhost:5672/
+          JWT_SECRET_KEY: ci-test-secret-not-for-production-use
+        run: python3 -m pytest -v
+
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build backend image
+        run: docker build -t shortlink-backend:ci -f backend/Dockerfile backend
+
+      - name: Build worker image
+        run: docker build -t shortlink-worker:ci -f backend/Dockerfile.worker backend

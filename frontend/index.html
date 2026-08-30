@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ShortLink</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root { --bg: #0f172a; --card: #1e293b; --text: #e2e8f0; --accent: #38bdf8; --muted: #94a3b8; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 2rem; }
+  .container { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; }
+  .card { background: var(--card); border-radius: 12px; padding: 1.5rem; margin-bottom: 1.5rem; }
+  input, button { font-size: 1rem; padding: 0.6rem 0.9rem; border-radius: 8px; border: 1px solid #334155; }
+  input { width: 100%; background: #0f172a; color: var(--text); margin-bottom: 0.75rem; }
+  button { background: var(--accent); color: #0f172a; border: none; font-weight: 600; cursor: pointer; }
+  button:hover { opacity: 0.9; }
+  .row { display: flex; gap: 0.5rem; }
+  .row input { flex: 1; }
+  .result { margin-top: 1rem; word-break: break-all; }
+  .result a { color: var(--accent); }
+  .muted { color: var(--muted); font-size: 0.9rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.9rem; }
+  th, td { text-align: left; padding: 0.5rem; border-bottom: 1px solid #334155; }
+  .stat { font-size: 2rem; font-weight: 700; }
+  .error { color: #f87171; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>ShortLink</h1>
+
+  <div class="card">
+    <h3>Shorten a URL</h3>
+    <div class="row">
+      <input id="longUrl" placeholder="https://example.com/very/long/path" />
+      <button onclick="createShortUrl()">Shorten</button>
+    </div>
+    <div id="createResult" class="result"></div>
+  </div>
+
+  <div class="card">
+    <h3>Login (optional — enables analytics)</h3>
+    <div class="row">
+      <input id="email" placeholder="email" />
+      <input id="password" type="password" placeholder="password" />
+      <button onclick="login()">Login</button>
+      <button onclick="register()">Register</button>
+    </div>
+    <div id="authStatus" class="muted"></div>
+  </div>
+
+  <div class="card">
+    <h3>Analytics</h3>
+    <div class="row">
+      <input id="analyticsCode" placeholder="short code (e.g. abc1234)" />
+      <button onclick="loadAnalytics()">Load</button>
+    </div>
+    <div id="analyticsResult"></div>
+    <canvas id="deviceChart" height="120"></canvas>
+    <table id="clicksTable"></table>
+  </div>
+</div>
+
+<script>
+// Hardcoded to localhost:8000 -- this dashboard is a static file
+// typically opened directly via file:// (double-clicked), where
+// window.location.hostname is empty and origin-based detection
+// breaks. If you deploy this dashboard behind its own web server on
+// a different host, change this to that host's actual API URL.
+const API_BASE = 'http://localhost:8000';
+
+let accessToken = null;
+let deviceChart = null;
+
+async function createShortUrl() {
+  const longUrl = document.getElementById('longUrl').value.trim();
+  const resultEl = document.getElementById('createResult');
+  resultEl.innerHTML = '';
+  if (!longUrl) return;
+
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+
+    const resp = await fetch(`${API_BASE}/api/v1/urls`, {
+      method: 'POST', headers, body: JSON.stringify({ long_url: longUrl }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      resultEl.innerHTML = `<span class="error">${data.detail || 'Error creating URL'}</span>`;
+      return;
+    }
+    resultEl.innerHTML = `Short URL: <a href="${data.short_url}" target="_blank">${data.short_url}</a>
+      <div class="muted">code: ${data.short_code}</div>`;
+  } catch (e) {
+    resultEl.innerHTML = `<span class="error">Could not reach the API at ${API_BASE}. Is the backend running?</span>`;
+  }
+}
+
+async function register() {
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const statusEl = document.getElementById('authStatus');
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/auth/register`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await resp.json();
+    statusEl.textContent = resp.ok ? 'Registered — now click Login.' : (data.detail || 'Registration failed');
+  } catch (e) {
+    statusEl.innerHTML = `<span class="error">Could not reach the API.</span>`;
+  }
+}
+
+async function login() {
+  const email = document.getElementById('email').value.trim();
+  const password = document.getElementById('password').value;
+  const statusEl = document.getElementById('authStatus');
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/auth/login`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) { statusEl.innerHTML = `<span class="error">${data.detail}</span>`; return; }
+    accessToken = data.access_token;
+    statusEl.textContent = `Logged in as ${email}. URLs you create now will be owned by you.`;
+  } catch (e) {
+    statusEl.innerHTML = `<span class="error">Could not reach the API.</span>`;
+  }
+}
+
+async function loadAnalytics() {
+  const code = document.getElementById('analyticsCode').value.trim();
+  const resultEl = document.getElementById('analyticsResult');
+  const tableEl = document.getElementById('clicksTable');
+  resultEl.innerHTML = '';
+  tableEl.innerHTML = '';
+  if (!code) return;
+
+  if (!accessToken) {
+    resultEl.innerHTML = `<span class="error">Login first — analytics are only visible to the URL's owner.</span>`;
+    return;
+  }
+
+  try {
+    const resp = await fetch(`${API_BASE}/api/v1/urls/${code}/analytics`, {
+      headers: { 'Authorization': `Bearer ${accessToken}` },
+    });
+    const data = await resp.json();
+    if (!resp.ok) { resultEl.innerHTML = `<span class="error">${data.detail}</span>`; return; }
+
+    resultEl.innerHTML = `<div class="stat">${data.total_clicks}</div><div class="muted">total clicks</div>`;
+
+    const counts = {};
+    data.recent_clicks.forEach(c => {
+      const key = c.device_type || 'unknown';
+      counts[key] = (counts[key] || 0) + 1;
+    });
+
+    if (deviceChart) deviceChart.destroy();
+    deviceChart = new Chart(document.getElementById('deviceChart'), {
+      type: 'doughnut',
+      data: {
+        labels: Object.keys(counts),
+        datasets: [{ data: Object.values(counts), backgroundColor: ['#38bdf8', '#a78bfa', '#34d399', '#fbbf24', '#f87171'] }],
+      },
+      options: { plugins: { legend: { labels: { color: '#e2e8f0' } } } },
+    });
+
+    let rows = '<tr><th>Time</th><th>Device</th><th>Browser</th><th>OS</th><th>Referrer</th></tr>';
+    data.recent_clicks.forEach(c => {
+      rows += `<tr><td>${new Date(c.clicked_at).toLocaleString()}</td><td>${c.device_type || '—'}</td>
+        <td>${c.browser || '—'}</td><td>${c.os || '—'}</td><td>${c.referrer || '—'}</td></tr>`;
+    });
+    tableEl.innerHTML = rows;
+  } catch (e) {
+    resultEl.innerHTML = `<span class="error">Could not reach the API.</span>`;
+  }
+}
+</script>
+</body>
+</html>

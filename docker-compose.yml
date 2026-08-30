@@ -1,0 +1,98 @@
+# Phase 7+: adds the backend API and analytics worker as containers
+# alongside Postgres, Redis, and RabbitMQ -- the full stack now runs
+# with a single `docker compose up`.
+
+services:
+
+  postgres:
+    image: postgres:16
+    container_name: shortlink-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: devpassword
+      POSTGRES_DB: shortlink
+      
+    ports:
+      - "5432:5432"
+    volumes:
+      - shortlink_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: shortlink-redis
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    # No volume: the redirect cache is fully disposable and always
+    # repopulatable from Postgres (that's the entire point of
+    # cache-aside) -- persisting it would be pointless complexity.
+
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: shortlink-rabbitmq
+    ports:
+      - "5672:5672"    # AMQP protocol
+      - "15672:15672"  # management UI, http://localhost:15672 (guest/guest)
+    volumes:
+      - shortlink_rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: shortlink-backend
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql://postgres:devpassword@postgres:5432/shortlink
+      REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in your .env file, e.g. openssl rand -hex 32}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    # Migrations run once, on container start, before uvicorn -- see
+    # the command override. Idempotent (migrate.py tracks applied
+    # migrations), so safe to run on every container start/restart.
+    command: sh -c "python3 -m app.core.migrate && uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.worker
+    container_name: shortlink-worker
+    environment:
+      DATABASE_URL: postgresql://postgres:devpassword@postgres:5432/shortlink
+      RABBITMQ_URL: amqp://guest:guest@rabbitmq:5672/
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+    # Scale horizontally if needed: `docker compose up --scale worker=3`
+    # -- RabbitMQ's consumer groups naturally load-balance messages
+    # across however many worker instances are running, no extra code
+    # required (see basic_qos(prefetch_count=10) in worker.py, which
+    # keeps one slow instance from hoarding the whole queue).
+
+volumes:
+  shortlink_postgres_data:
+  shortlink_rabbitmq_data:
