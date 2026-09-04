@@ -4,13 +4,7 @@ A production-style URL shortener and analytics platform, built incrementally to 
 
 **Status: Feature-complete MVP+ — URL shortening, auth, caching, async analytics pipeline with a reliable worker, and rate limiting. All built, tested, and verified against real infrastructure (not mocks).**
 
-## Documentation
 
-- [`TECH_STACK_DECISIONS.md`](./TECH_STACK_DECISIONS.md) — every technology choice explained, with Q&A
-- [`SYSTEM_DESIGN_QA.md`](./SYSTEM_DESIGN_QA.md) — system design interview prep, grounded in what was actually built
-- [`TECH_STACK_INTERVIEW_CHEATSHEET.md`](./TECH_STACK_INTERVIEW_CHEATSHEET.md) — quick-reference format
-- [`docs/decisions/`](./docs/decisions/) — full Architecture Decision Records (ADR-001 through ADR-007)
-- [`interview-preparation/`](./interview-preparation/) — project defense talking points at multiple lengths
 
 ## Features
 
@@ -61,7 +55,6 @@ Redirect → BackgroundTasks → RabbitMQ (click_events queue)
 **1. Set up your environment file:**
 ```bash
 cp .env.example .env
-# Edit .env and set JWT_SECRET_KEY to a random value: openssl rand -hex 32
 ```
 
 **2. Start the full stack:**
@@ -114,4 +107,3 @@ Most test files require running Postgres/Redis/RabbitMQ instances (via `docker c
 | CI | GitHub Actions | $0* | Cloud | Yes |
 | Deployment | Any free-tier PaaS | $0* | Cloud | No |
 
-\* GitHub Actions' standard hosted runners are free for public repositories per GitHub's current documentation. Cloud deployment free-tier terms should be verified at time of use — never a mandatory dependency of this project.
